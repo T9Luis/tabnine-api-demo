@@ -258,6 +258,212 @@ API_ENDPOINTS = {
         ],
     },
 
+    # ── user/v1 · User Management (newer namespace) ───────────────────────────
+
+    "user/v1 · Get User by ID": {
+        "method": "GET",
+        "path": "/api/user/v1/{userId}",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Retrieve full details for a specific user by their UUID, including role, status, and team memberships.",
+        "doc_anchor": "#get-user-by-id",
+        "path_params": ["userId"],
+        "body_fields": [],
+        "query_params": [],
+    },
+    "user/v1 · Get User by Email": {
+        "method": "GET",
+        "path": "/api/user/v1/by-email/{email}",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Retrieve full details for a specific user by their email address.",
+        "doc_anchor": "#get-user-by-email",
+        "path_params": ["email"],
+        "body_fields": [],
+        "query_params": [],
+    },
+    "user/v1 · Update User": {
+        "method": "PATCH",
+        "path": "/api/user/v1/{userId}",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Partially update a user's profile. All fields are optional. Cannot modify self, instance admins, or anonymised users.",
+        "doc_anchor": "#update-user",
+        "path_params": ["userId"],
+        "body_fields": [
+            ("role",   "Member", "Member or Admin"),
+            ("active", "true",   "true or false"),
+        ],
+        "query_params": [],
+    },
+    "user/v1 · Get User Allowed Teams": {
+        "method": "GET",
+        "path": "/api/user/v1/{userId}/allowed-teams",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Retrieve the list of teams a user is allowed to access.",
+        "doc_anchor": "#get-user-allowed-teams",
+        "path_params": ["userId"],
+        "body_fields": [],
+        "query_params": [],
+    },
+    "user/v1 · Set User Allowed Teams": {
+        "method": "PATCH",
+        "path": "/api/user/v1/{userId}/allowed-teams",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Replace the set of teams a user is allowed to access. Send an array of team UUIDs.",
+        "doc_anchor": "#set-user-allowed-teams",
+        "path_params": ["userId"],
+        "body_fields": [
+            ("teamIds", '["team-uuid-here"]', "JSON array of team UUIDs"),
+        ],
+        "query_params": [],
+    },
+    "user/v1 · Remove User Allowed Teams": {
+        "method": "DELETE",
+        "path": "/api/user/v1/{userId}/allowed-teams",
+        "version": "v1",
+        "category": "User Management",
+        "description": "Remove one or more teams from a user's allowed-teams list. Send the team UUIDs to remove.",
+        "doc_anchor": "#remove-user-allowed-teams",
+        "path_params": ["userId"],
+        "body_fields": [
+            ("teamIds", '["team-uuid-here"]', "JSON array of team UUIDs to remove"),
+        ],
+        "query_params": [],
+    },
+
+    # ── team/v1 · Team Management (newer namespace) ───────────────────────────
+
+    "team/v1 · Get Team": {
+        "method": "GET",
+        "path": "/api/team/v1/{teamId}",
+        "version": "v1",
+        "category": "Team Management",
+        "description": "Retrieve details for a specific team by its UUID.",
+        "doc_anchor": "#get-team",
+        "path_params": ["teamId"],
+        "body_fields": [],
+        "query_params": [],
+    },
+    "team/v1 · Create Team": {
+        "method": "POST",
+        "path": "/api/team/v1",
+        "version": "v1",
+        "category": "Team Management",
+        "description": "Create a new team in your Tabnine organisation. Requires Admin role.",
+        "doc_anchor": "#create-team",
+        "path_params": [],
+        "body_fields": [
+            ("name", "My New Team", "Team display name"),
+        ],
+        "query_params": [],
+    },
+    "team/v1 · Update Team": {
+        "method": "PUT",
+        "path": "/api/team/v1/{teamId}",
+        "version": "v1",
+        "category": "Team Management",
+        "description": "Update an existing team's name or settings. Requires Admin or Manager role.",
+        "doc_anchor": "#update-team",
+        "path_params": ["teamId"],
+        "body_fields": [
+            ("name", "", "New team display name"),
+        ],
+        "query_params": [],
+    },
+
+    # ── team/v1 · Repository Connections ──────────────────────────────────────
+
+    "team/v1 · List Repo Connections": {
+        "method": "GET",
+        "path": "/api/team/v1/{teamId}/connections/repositories",
+        "version": "v1",
+        "category": "Repo Connections",
+        "description": "List all repository connections for a specific team (used by Tabnine Context Engine).",
+        "doc_anchor": "#list-repo-connections",
+        "path_params": ["teamId"],
+        "body_fields": [],
+        "query_params": [],
+    },
+    "team/v1 · Add Repo Connection": {
+        "method": "POST",
+        "path": "/api/team/v1/{teamId}/connections/repositories",
+        "version": "v1",
+        "category": "Repo Connections",
+        "description": "Add a repository connection to a team. Idempotent operation.",
+        "doc_anchor": "#add-repo-connection",
+        "path_params": ["teamId"],
+        "body_fields": [
+            ("repository_link",                 "https://github.com/org/repo", "Full repository URL"),
+            ("repo_type",                       "git",                         "git or other"),
+            ("authentication_method",           "ssh",                         "ssh or https"),
+            ("authentication_credentials_name", "",                            "Credential name (optional)"),
+            ("view_source_link_pattern",        "",                            "Source link pattern (optional)"),
+        ],
+        "query_params": [],
+    },
+    "team/v1 · Update Repo Connection": {
+        "method": "PUT",
+        "path": "/api/team/v1/{teamId}/connections/repositories/{repositoryLink}",
+        "version": "v1",
+        "category": "Repo Connections",
+        "description": "Update an existing repository connection for a team.",
+        "doc_anchor": "#update-repo-connection",
+        "path_params": ["teamId", "repositoryLink"],
+        "body_fields": [
+            ("repo_type",                       "git",  "git or other"),
+            ("authentication_method",           "ssh",  "ssh or https"),
+            ("authentication_credentials_name", "",     "Credential name (optional)"),
+            ("view_source_link_pattern",        "",     "Source link pattern (optional)"),
+        ],
+        "query_params": [],
+    },
+    "team/v1 · Delete Repo Connection": {
+        "method": "DELETE",
+        "path": "/api/team/v1/{teamId}/connections/repositories/{repositoryLink}",
+        "version": "v1",
+        "category": "Repo Connections",
+        "description": "Remove a repository connection from a team.",
+        "doc_anchor": "#delete-repo-connection",
+        "path_params": ["teamId", "repositoryLink"],
+        "body_fields": [],
+        "query_params": [],
+    },
+
+    # ── invitation/v1 · Invitations ───────────────────────────────────────────
+
+    "invitation/v1 · List Invitations": {
+        "method": "GET",
+        "path": "/api/invitation/v1",
+        "version": "v1",
+        "category": "Invitations",
+        "description": "Retrieve a paginated list of pending and historical invitations for your organisation.",
+        "doc_anchor": "#list-invitations",
+        "path_params": [],
+        "body_fields": [],
+        "query_params": [
+            ("offset", "0",  "Pagination offset"),
+            ("limit",  "50", "Max results per page"),
+        ],
+    },
+    "invitation/v1 · Create Invitation": {
+        "method": "POST",
+        "path": "/api/invitation/v1",
+        "version": "v1",
+        "category": "Invitations",
+        "description": "Invite a user to your Tabnine organisation by email. Optionally assign them to a team and role.",
+        "doc_anchor": "#create-invitation",
+        "path_params": [],
+        "body_fields": [
+            ("email",  "", "Email address of the person to invite"),
+            ("teamId", "", "Team UUID to assign (optional)"),
+            ("role",   "Member", "Member or Admin"),
+        ],
+        "query_params": [],
+    },
+
     # ── v2 · Usage ────────────────────────────────────────────────────────────
 
     "v2 · Org Usage": {
@@ -1056,7 +1262,7 @@ version_badge = (
     f'border-radius:4px;font-size:0.75rem;font-weight:700;margin-right:8px;">'
     f'{endpoint["version"].upper()}</span>'
 )
-method_colours = {"GET": "#16A34A", "POST": "#D97706", "DELETE": "#DC2626"}
+method_colours = {"GET": "#16A34A", "POST": "#D97706", "DELETE": "#DC2626", "PATCH": "#7C3AED", "PUT": "#0369A1"}
 method_colour = method_colours.get(endpoint["method"], "#6B7280")
 method_badge = (
     f'<span style="background:{method_colour};color:white;padding:2px 8px;'
@@ -1157,7 +1363,7 @@ if endpoint["body_fields"]:
 
 # ── Destructive action warning ─────────────────────────────────────────────────
 
-is_destructive = endpoint["method"] == "DELETE" or "Remove" in selected_name or "Revoke" in selected_name
+is_destructive = endpoint["method"] == "DELETE" or any(w in selected_name for w in ("Remove", "Revoke", "Delete"))
 confirmed = True
 
 if is_destructive:
