@@ -13,7 +13,7 @@ st.set_page_config(
 )
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-BASE_URL = "https://webapi.tabnine.com"
+BASE_URL = "https://api.tabnine.com"
 
 DOCS_BASE = "https://docs.tabnine.com/main/administering-tabnine/managing-your-team/tabnine-apis"
 
@@ -99,9 +99,9 @@ API_ENDPOINTS = {
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def make_request(token: str, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+def make_request(token: str, method: str, path: str, body: dict | None = None, base_url: str = BASE_URL) -> tuple[int, dict]:
     """Execute an authenticated request against the Tabnine API."""
-    url = f"{BASE_URL}{path}"
+    url = f"{base_url}{path}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -178,6 +178,16 @@ with st.sidebar:
     else:
         st.warning("Enter a token to enable API calls.")
 
+    with st.expander("⚙️ Advanced — API base URL"):
+        base_url_override = st.text_input(
+            "Base URL",
+            value=BASE_URL,
+            help="Override if the Tabnine docs show a different host or path prefix.",
+        )
+        if base_url_override != BASE_URL:
+            st.warning("Using custom base URL.")
+    BASE_URL_EFFECTIVE = base_url_override
+
     st.markdown("---")
     st.subheader("📚 Resources")
     st.markdown(f"[Official API Docs]({DOCS_BASE})")
@@ -218,7 +228,7 @@ with col_info:
     st.subheader(selected_name)
     st.markdown(endpoint["description"])
     st.markdown(
-        f"`{endpoint['method']}` &nbsp; `{BASE_URL}{endpoint['path']}`",
+        f"`{endpoint['method']}` &nbsp; `{BASE_URL_EFFECTIVE}{endpoint['path']}`",
         unsafe_allow_html=True,
     )
 
@@ -284,16 +294,20 @@ if st.button(f"▶  Run  —  {endpoint['method']}  {endpoint['path']}", disable
     # Resolve path placeholders
     resolved_path = build_path(endpoint["path"], {k: v for k, v in filled_params.items() if k in path_params})
 
+    full_url = f"{BASE_URL_EFFECTIVE}{resolved_path}"
+
     with st.spinner("Calling the Tabnine API..."):
         status_code, response_data = make_request(
             token=token,
             method=endpoint["method"],
             path=resolved_path,
             body=body,
+            base_url=BASE_URL_EFFECTIVE,
         )
 
     st.markdown("---")
     st.subheader("Response")
+    st.caption(f"Request sent to: `{full_url}`")
     render_response(status_code, response_data)
 
     # ── cURL equivalent (handy for colleagues) ─────────────────────────────
@@ -302,7 +316,7 @@ if st.button(f"▶  Run  —  {endpoint['method']}  {endpoint['path']}", disable
     curl_body = f" \\\n  -d '{json.dumps(body)}'" if body else ""
     curl_cmd = (
         f"curl -X {endpoint['method']} \\\n"
-        f"  '{BASE_URL}{resolved_path}' \\\n"
+        f"  '{BASE_URL_EFFECTIVE}{resolved_path}' \\\n"
         f"  -H 'Authorization: Bearer <YOUR_TOKEN>' \\\n"
         f"  -H 'Content-Type: application/json'"
         f"{curl_body}"
