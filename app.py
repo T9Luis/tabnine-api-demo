@@ -65,7 +65,10 @@ API_ENDPOINTS = {
         "doc_anchor": "#list-users",
         "path_params": [],
         "body_fields": [],
-        "query_params": [],
+        "query_params": [
+            ("offset", "0",  "Pagination offset (0-based)"),
+            ("limit",  "50", "Number of users to return (max 100)"),
+        ],
     },
     # ── v1 · Users ────────────────────────────────────────────────────────────
 
@@ -370,7 +373,9 @@ def _fetch_teams(token: str, base_url: str) -> list[dict]:
     cache_key = f"_teams_{hash(token + base_url)}"
     if cache_key not in st.session_state:
         org_id = st.session_state.get("org_id") or None
-        qp = {"organizationId": org_id} if org_id else None
+        qp: dict = {"offset": 0, "limit": 200}
+        if org_id:
+            qp["organizationId"] = org_id
         code, data = make_request(token, "GET", "/api/v1/organization/teams", base_url=base_url, query_params=qp)
         if code == 200:
             if isinstance(data, list):
@@ -396,7 +401,9 @@ def _fetch_users(token: str, base_url: str, force: bool = False) -> list[dict]:
 
     if cache_key not in st.session_state:
         org_id = st.session_state.get("org_id") or None
-        qp = {"organizationId": org_id} if org_id else None
+        qp: dict = {"offset": 0, "limit": 200}
+        if org_id:
+            qp["organizationId"] = org_id
         code, data = make_request(token, "GET", "/api/v1/organization/users", base_url=base_url, query_params=qp)
         users: list[dict] = []
         if code == 200:
