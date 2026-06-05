@@ -6,7 +6,9 @@ An interactive Streamlit application that lets you explore and run every endpoin
 
 ## Live Demo
 
-> After deploying (see below), replace this line with your Streamlit Cloud URL so colleagues can open it instantly.
+> Deploy steps below take ~2 minutes. Once done, paste your `https://<your-app>.streamlit.app` URL here and commit it so colleagues land straight on it.
+>
+> GitHub repo: **https://github.com/T9Luis/tabnine-api-demo**
 
 ---
 
@@ -36,15 +38,9 @@ For each call the app shows the live API response, an HTTP status badge, and a r
 
 This is the fastest way to give colleagues a shareable URL with zero infrastructure.
 
-**Step 1 — Push this repo to GitHub.**
+**Step 1 — The repo is already on GitHub.**
 
-```bash
-git init
-git add .
-git commit -m "Initial Tabnine API demo"
-git remote add origin https://github.com/<your-org>/<your-repo>.git
-git push -u origin main
-```
+The repository lives at `https://github.com/T9Luis/tabnine-api-demo`. Any future changes you push will automatically redeploy the app.
 
 **Step 2 — Create a free Streamlit Cloud account.**
 
