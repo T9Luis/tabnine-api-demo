@@ -364,6 +364,162 @@ def build_path(path_template: str, params: dict) -> str:
     return path_template
 
 
+# ── Pre-fetch helpers (results cached in session_state per token) ───────────────
+
+def _fetch_teams(token: str, base_url: str) -> list[dict]:
+    cache_key = f"_teams_{hash(token + base_url)}"
+    if cache_key not in st.session_state:
+        code, data = make_request(token, "GET", "/api/v1/organization/teams", base_url=base_url)
+        if code == 200:
+            if isinstance(data, list):
+                teams = data
+            elif isinstance(data, dict):
+                teams = next(
+                    (data[k] for k in ("teams", "data", "items") if isinstance(data.get(k), list)),
+                    [],
+                )
+            else:
+                teams = []
+        else:
+            teams = []
+        st.session_state[cache_key] = teams
+    return st.session_state[cache_key]
+
+
+def _fetch_users(token: str, base_url: str) -> list[dict]:
+    cache_key = f"_users_{hash(token + base_url)}"
+    if cache_key not in st.session_state:
+        code, data = make_request(token, "GET", "/api/v1/organization/users", base_url=base_url)
+        if code == 200:
+            if isinstance(data, list):
+                users = data
+            elif isinstance(data, dict):
+                users = next(
+                    (data[k] for k in ("users", "data", "items") if isinstance(data.get(k), list)),
+                    [],
+                )
+            else:
+                users = []
+        else:
+            users = []
+        st.session_state[cache_key] = users
+    return st.session_state[cache_key]
+
+
+# ── Smart parameter input dispatcher ───────────────────────────────────────────
+
+def _smart_param_input(
+    key: str,
+    default: str,
+    hint: str,
+    widget_key: str,
+    token: str | None = None,
+    base_url: str = BASE_URL,
+    required: bool = False,
+) -> str:
+    """Render the most appropriate Streamlit widget for a given parameter key."""
+    label = key.replace("_", " ").title() + (" *" if required else "")
+    kl    = key.lower()
+
+    # ── Organisation ID — auto-filled, read-only ───────────────────────────
+    if kl == "organizationid":
+        st.text_input(
+            label,
+            value=default,
+            key=widget_key,
+            help="Auto-filled from your verified token.",
+            disabled=True,
+        )
+        return default
+
+    # ── Date / time range fields → calendar picker ─────────────────────────
+    if kl in ("from", "to", "startdate", "enddate"):
+        # Parse the default ISO string to a Python date
+        parsed_date = None
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                parsed_date = datetime.strptime(default, fmt).date()
+                break
+            except (ValueError, TypeError):
+                continue
+        if parsed_date is None:
+            parsed_date = datetime.today().date()
+
+        picked = st.date_input(label, value=parsed_date, help=hint, key=widget_key)
+        return picked.strftime("%Y-%m-%dT00:00:00Z")
+
+    # ── Granularity → segmented selectbox ─────────────────────────────────
+    if kl == "granularity":
+        options = ["all", "daily", "weekly", "monthly"]
+        idx = options.index(default) if default in options else 0
+        return st.selectbox(label, options=options, index=idx, help=hint, key=widget_key)
+
+    # ── Role → selectbox ───────────────────────────────────────────────────
+    if kl == "role":
+        options = ["Member", "Admin"]
+        idx = options.index(default) if default in options else 0
+        return st.selectbox(label, options=options, index=idx, help=hint, key=widget_key)
+
+    # ── Team ID → pre-fetched team selector ───────────────────────────────
+    if kl == "teamid" and token:
+        teams = _fetch_teams(token, base_url)
+        if teams:
+            # Build label → id map
+            options_map: dict[str, str] = {}
+            for t in teams:
+                tid  = t.get("id", "")
+                name = t.get("name", tid)
+                flag = " (default)" if t.get("isDefaultTeam") else ""
+                options_map[f"{name}{flag}"] = tid
+
+            labels = list(options_map.keys())
+            # Try to pre-select if default is a known UUID
+            pre = next((lbl for lbl, v in options_map.items() if v == default), labels[0])
+            chosen = st.selectbox(label, options=labels,
+                                  index=labels.index(pre), help=hint, key=widget_key)
+            st.caption(f"ID: `{options_map[chosen]}`")
+            return options_map[chosen]
+        # Fallback if fetch failed
+        return st.text_input(label, value=default, help=hint,
+                             key=widget_key, placeholder="Team UUID")
+
+    # ── User ID → pre-fetched user selector ───────────────────────────────
+    if kl in ("userid", "user_id") and token:
+        users = _fetch_users(token, base_url)
+        if users:
+            options_map: dict[str, str] = {}
+            for u in users:
+                uid   = u.get("id", u.get("user_id", ""))
+                email = u.get("email", uid)
+                role  = u.get("role", "")
+                options_map[f"{email} ({role})"] = uid
+
+            labels = list(options_map.keys())
+            pre = next((lbl for lbl, v in options_map.items() if v == default), labels[0] if labels else "")
+            if labels:
+                chosen = st.selectbox(label, options=labels,
+                                      index=labels.index(pre) if pre in labels else 0,
+                                      help=hint, key=widget_key)
+                st.caption(f"ID: `{options_map[chosen]}`")
+                return options_map[chosen]
+        return st.text_input(label, value=default, help=hint,
+                             key=widget_key, placeholder="User UUID")
+
+    # ── Limit / Offset → number input ─────────────────────────────────────
+    if kl in ("limit", "offset"):
+        try:
+            default_int = int(default)
+        except (ValueError, TypeError):
+            default_int = 0
+        step = 10 if kl == "limit" else 1
+        val  = st.number_input(label, min_value=0, max_value=1000,
+                               value=default_int, step=step, help=hint, key=widget_key)
+        return str(int(val))
+
+    # ── Default: plain text input ──────────────────────────────────────────
+    return st.text_input(label, value=default, help=hint, key=widget_key)
+
+
 # ── Value type detection & formatting ──────────────────────────────────────────
 
 # Keywords that signal a field holds a timestamp
@@ -859,11 +1015,14 @@ if endpoint["path_params"]:
     pp_cols = st.columns(min(len(endpoint["path_params"]), 3))
     for i, key in enumerate(endpoint["path_params"]):
         with pp_cols[i % len(pp_cols)]:
-            path_values[key] = st.text_input(
-                key.replace("_", " ").title(),
-                value="",
-                key=f"path_{selected_name}_{key}",
-                placeholder=f"Required — {key}",
+            path_values[key] = _smart_param_input(
+                key=key,
+                default="",
+                hint=f"Required path segment: {key}",
+                widget_key=f"path_{selected_name}_{key}",
+                token=token,
+                base_url=BASE_URL_EFFECTIVE,
+                required=True,
             )
 
 # ── Query parameter inputs ─────────────────────────────────────────────────────
@@ -872,17 +1031,21 @@ query_values: dict[str, str] = {}
 
 if endpoint["query_params"]:
     st.subheader("Query Parameters")
-    qp_cols = st.columns(min(len(endpoint["query_params"]), 3))
+    # Use 2 columns so date pickers and dropdowns have breathing room
+    n_qp_cols = min(len(endpoint["query_params"]), 2)
+    qp_cols = st.columns(n_qp_cols)
     for i, (key, default, hint) in enumerate(endpoint["query_params"]):
-        with qp_cols[i % len(qp_cols)]:
-            # Auto-fill organizationId from the verified org fetched at login
-            if key == "organizationId" and not default:
-                default = st.session_state.get("org_id", "")
-            query_values[key] = st.text_input(
-                key.replace("_", " ").title(),
-                value=default,
-                key=f"query_{selected_name}_{key}",
-                help=hint,
+        # Auto-fill organizationId before passing to the smart dispatcher
+        if key == "organizationId" and not default:
+            default = st.session_state.get("org_id", "")
+        with qp_cols[i % n_qp_cols]:
+            query_values[key] = _smart_param_input(
+                key=key,
+                default=default,
+                hint=hint,
+                widget_key=f"query_{selected_name}_{key}",
+                token=token,
+                base_url=BASE_URL_EFFECTIVE,
             )
 
 # ── Body field inputs ──────────────────────────────────────────────────────────
@@ -891,15 +1054,17 @@ body: dict | None = None
 
 if endpoint["body_fields"]:
     st.subheader("Request Body")
-    bf_cols = st.columns(min(len(endpoint["body_fields"]), 3))
+    bf_cols = st.columns(min(len(endpoint["body_fields"]), 2))
     body_values: dict[str, str] = {}
     for i, (key, default, hint) in enumerate(endpoint["body_fields"]):
         with bf_cols[i % len(bf_cols)]:
-            body_values[key] = st.text_input(
-                key.replace("_", " ").title(),
-                value=default,
-                key=f"body_{selected_name}_{key}",
-                help=hint,
+            body_values[key] = _smart_param_input(
+                key=key,
+                default=default,
+                hint=hint,
+                widget_key=f"body_{selected_name}_{key}",
+                token=token,
+                base_url=BASE_URL_EFFECTIVE,
             )
     # Parse JSON array fields transparently
     parsed_body: dict = {}
