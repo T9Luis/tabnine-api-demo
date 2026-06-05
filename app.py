@@ -3,6 +3,8 @@ import requests
 import json
 import pandas as pd
 from datetime import datetime
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -308,7 +310,14 @@ API_ENDPOINTS = {
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def make_request(token: str, method: str, path: str, body: dict | None = None, base_url: str = BASE_URL) -> tuple[int, dict]:
+def make_request(
+    token: str,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    base_url: str = BASE_URL,
+    query_params: dict | None = None,
+) -> tuple[int, dict]:
     """Execute an authenticated request against the Tabnine API."""
     url = f"{base_url}{path}"
     headers = {
@@ -322,6 +331,7 @@ def make_request(token: str, method: str, path: str, body: dict | None = None, b
             url=url,
             headers=headers,
             json=body if body else None,
+            params=query_params,   # requests handles URL-encoding (@ → %40 etc.)
             timeout=15,
         )
         try:
@@ -353,18 +363,184 @@ def build_path(path_template: str, params: dict) -> str:
     return path_template
 
 
-def render_response(code: int, data: dict):
-    """Render the API response in a structured, readable way."""
+def _metric_card(label: str, value, delta=None, suffix: str = "") -> None:
+    """Render a single st.metric tile, formatting large numbers with commas."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        formatted = f"{value:,.0f}{suffix}" if isinstance(value, int) else f"{value:,.2f}{suffix}"
+    else:
+        formatted = str(value)
+    st.metric(label=label, value=formatted, delta=delta)
+
+
+def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
+    """Render usage response as BI metric tiles + charts."""
+    usage_block = data.get("usage", data)
+    items = usage_block.get("data", [])
+    if not items:
+        st.warning("No data points returned for the selected date range.")
+        return
+
+    # ── Aggregate totals across all data points ────────────────────────────
+    def _sum(key, nested=None):
+        total = 0
+        for item in items:
+            src = item.get(nested, item) if nested else item
+            total += src.get(key, 0) if isinstance(src, dict) else 0
+        return total
+
+    is_v2 = "v2" in endpoint.get("path", "")
+
+    st.subheader("Summary")
+    if is_v2:
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: _metric_card("Active Users", _sum("activeUsers"))
+        with c2: _metric_card("Tokens Consumed", _sum("totalTokensConsumed"))
+        with c3: _metric_card("Input Tokens", _sum("totalInputTokens"))
+        with c4: _metric_card("Output Tokens", _sum("totalOutputTokens"))
+        with c5: _metric_card("Total Cost", _sum("totalCost"), suffix=" $")
+    else:
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        with c1: _metric_card("Active Users", _sum("activeUsers"))
+        with c2: _metric_card("Completions", _sum("completions", "codeCompletions"))
+        with c3: _metric_card("Chars Completed", _sum("charsCompleted", "codeCompletions"))
+        with c4: _metric_card("Chat Interactions", _sum("interactions", "chat"))
+        with c5: _metric_card("Agent Interactions", _sum("interactions", "agent"))
+        with c6: _metric_card("Automation Factor", round(_sum("automationFactor", "codeCompletions") / max(len(items), 1), 2))
+
+    # ── Time-series chart (only meaningful when multiple data points) ──────
+    if len(items) > 1:
+        st.subheader("Trend")
+        df_trend = pd.DataFrame(items)
+        df_trend["from"] = pd.to_datetime(df_trend["from"], errors="coerce")
+
+        if is_v2 and "totalTokensConsumed" in df_trend.columns:
+            fig = px.line(df_trend, x="from", y=["totalTokensConsumed", "totalInputTokens", "totalOutputTokens"],
+                          labels={"value": "Tokens", "from": "Date", "variable": "Metric"},
+                          title="Token Consumption Over Time")
+        elif "activeUsers" in df_trend.columns:
+            y_cols = [c for c in ["activeUsers"] if c in df_trend.columns]
+            fig = px.bar(df_trend, x="from", y=y_cols,
+                         labels={"value": "Count", "from": "Date", "variable": "Metric"},
+                         title="Active Users Over Time", barmode="group")
+        else:
+            fig = None
+
+        if fig:
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                              font_color="#F8FAFC", legend_title_text="")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── Model breakdown chart (v2 only) ───────────────────────────────────
+    if is_v2:
+        model_rows = []
+        for item in items:
+            for mb in item.get("modelBreakdown", []):
+                model_rows.append(mb)
+        if model_rows:
+            st.subheader("Model Breakdown")
+            df_models = pd.DataFrame(model_rows)
+            if "model" in df_models.columns and "tokensConsumed" in df_models.columns:
+                agg = df_models.groupby("model", as_index=False)["tokensConsumed"].sum()
+                fig2 = px.pie(agg, names="model", values="tokensConsumed",
+                              title="Tokens by Model", hole=0.4)
+                fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC")
+                st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Data table ────────────────────────────────────────────────────────
+    st.subheader("Data Table")
+    df_flat = pd.json_normalize(items)
+    st.dataframe(df_flat, use_container_width=True, hide_index=True)
+
+
+def _render_list(data: list) -> None:
+    """Render a list response as a searchable, styled dataframe."""
+    if not data:
+        st.info("Empty list returned.")
+        return
+    df = pd.json_normalize(data)
+    total = len(df)
+    search = st.text_input("Filter rows", placeholder="Type to search across all columns…", key="_list_search")
+    if search:
+        mask = df.apply(lambda col: col.astype(str).str.contains(search, case=False, na=False)).any(axis=1)
+        df = df[mask]
+    st.caption(f"Showing {len(df)} of {total} rows")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def _render_object(data: dict) -> None:
+    """Render a single-object response as a key-value info card grid."""
+    flat = pd.json_normalize(data).to_dict(orient="records")
+    if not flat:
+        st.json(data)
+        return
+    items = list(flat[0].items())
+    cols = st.columns(min(len(items), 4))
+    for i, (k, v) in enumerate(items):
+        with cols[i % len(cols)]:
+            label = k.replace("_", " ").replace(".", " › ").title()
+            if isinstance(v, bool):
+                st.metric(label, "Yes" if v else "No")
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                st.metric(label, f"{v:,}")
+            elif isinstance(v, list):
+                st.metric(label, f"{len(v)} items")
+            else:
+                st.metric(label, str(v) if v is not None else "—")
+
+
+def render_response(code: int, data: dict | list, endpoint: dict | None = None) -> None:
+    """Smart renderer: BI dashboard for usage, table for lists, cards for objects."""
     st.markdown(f"**Status:** {status_badge(code)}")
 
-    if isinstance(data, list):
-        if data and isinstance(data[0], dict):
-            try:
-                st.dataframe(pd.DataFrame(data), use_container_width=True)
-                return
-            except Exception:
-                pass
-    st.json(data)
+    if code == 0 or not (200 <= code < 300):
+        st.json(data)
+        return
+
+    ep = endpoint or {}
+    path = ep.get("path", "")
+
+    # ── Route to the right renderer ───────────────────────────────────────
+    rendered_smart = False
+
+    if "usage" in path and isinstance(data, dict):
+        tab_bi, tab_raw = st.tabs(["Dashboard", "Raw JSON"])
+        with tab_bi:
+            _render_usage_dashboard(data, ep)
+        with tab_raw:
+            st.json(data)
+        rendered_smart = True
+
+    elif isinstance(data, list):
+        tab_table, tab_raw = st.tabs(["Table", "Raw JSON"])
+        with tab_table:
+            _render_list(data)
+        with tab_raw:
+            st.json(data)
+        rendered_smart = True
+
+    elif isinstance(data, dict):
+        # Lists nested under common keys
+        list_key = next((k for k in ("data", "items", "users", "teams", "results") if k in data and isinstance(data[k], list)), None)
+        if list_key:
+            tab_table, tab_raw = st.tabs(["Table", "Raw JSON"])
+            with tab_table:
+                meta = {k: v for k, v in data.items() if k != list_key}
+                if meta:
+                    meta_cols = st.columns(min(len(meta), 4))
+                    for i, (k, v) in enumerate(meta.items()):
+                        with meta_cols[i % len(meta_cols)]:
+                            st.metric(k.replace("_", " ").title(), str(v))
+                _render_list(data[list_key])
+            with tab_raw:
+                st.json(data)
+            rendered_smart = True
+
+    if not rendered_smart:
+        tab_cards, tab_raw = st.tabs(["Overview", "Raw JSON"])
+        with tab_cards:
+            _render_object(data)
+        with tab_raw:
+            st.json(data)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -376,16 +552,6 @@ with st.sidebar:
     )
     st.markdown("---")
     st.subheader("🔑 Authentication")
-    token = st.text_input(
-        "API Token",
-        type="password",
-        placeholder="Paste your Tabnine API token here",
-        help="Your token is never stored. It lives only in this browser session.",
-    )
-    if token:
-        st.success("Token loaded ✓")
-    else:
-        st.warning("Enter a token to enable API calls.")
 
     with st.expander("⚙️ Advanced — API base URL"):
         base_url_override = st.text_input(
@@ -396,6 +562,49 @@ with st.sidebar:
         if base_url_override != BASE_URL:
             st.warning("Using custom base URL.")
     BASE_URL_EFFECTIVE = base_url_override
+
+    token = st.text_input(
+        "API Token",
+        type="password",
+        placeholder="Paste your Tabnine API token here",
+        help="Your token is never stored. It lives only in this browser session.",
+    )
+
+    if token:
+        # Auto-fetch org details whenever the token changes
+        if st.session_state.get("_token_hash") != hash(token + BASE_URL_EFFECTIVE):
+            with st.spinner("Verifying token…"):
+                _code, _org = make_request(
+                    token, "GET", "/api/v1/organization", base_url=BASE_URL_EFFECTIVE
+                )
+            if _code == 200 and isinstance(_org, dict):
+                st.session_state["org_id"]   = _org.get("id", "")
+                st.session_state["org_name"] = _org.get("name", "Unknown org")
+                st.session_state["org_data"] = _org
+                st.session_state["token_ok"] = True
+            else:
+                st.session_state["org_id"]   = ""
+                st.session_state["org_name"] = ""
+                st.session_state["org_data"] = {}
+                st.session_state["token_ok"] = False
+            st.session_state["_token_hash"] = hash(token + BASE_URL_EFFECTIVE)
+
+        if st.session_state.get("token_ok"):
+            st.success("Token valid ✓")
+            org_name = st.session_state.get("org_name", "")
+            org_id   = st.session_state.get("org_id", "")
+            st.markdown(
+                f"""<div style="background:#1E293B;border-radius:8px;padding:10px 14px;margin-top:6px;">
+                <div style="font-size:0.7rem;color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;">Organisation</div>
+                <div style="font-size:1rem;font-weight:700;color:#F8FAFC;">{org_name}</div>
+                <div style="font-size:0.7rem;color:#64748B;margin-top:2px;word-break:break-all;">{org_id}</div>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.error("Token invalid or org unreachable.")
+    else:
+        st.warning("Enter a token to get started.")
 
     st.markdown("---")
     st.subheader("📚 Resources")
@@ -495,6 +704,9 @@ if endpoint["query_params"]:
     qp_cols = st.columns(min(len(endpoint["query_params"]), 3))
     for i, (key, default, hint) in enumerate(endpoint["query_params"]):
         with qp_cols[i % len(qp_cols)]:
+            # Auto-fill organizationId from the verified org fetched at login
+            if key == "organizationId" and not default:
+                default = st.session_state.get("org_id", "")
             query_values[key] = st.text_input(
                 key.replace("_", " ").title(),
                 value=default,
@@ -557,23 +769,27 @@ if st.button(
     # Resolve path placeholders
     resolved_path = build_path(endpoint["path"], path_values)
 
-    # Build query string
-    qs = "&".join(f"{k}={v}" for k, v in query_values.items() if v)
-    full_url = f"{BASE_URL_EFFECTIVE}{resolved_path}" + (f"?{qs}" if qs else "")
+    # Build query dict (non-empty values only) — requests handles URL encoding
+    query_dict = {k: v for k, v in query_values.items() if v}
+
+    # Build display URL (approximate — requests will properly encode special chars)
+    qs_display = "&".join(f"{k}={v}" for k, v in query_dict.items())
+    full_url = f"{BASE_URL_EFFECTIVE}{resolved_path}" + (f"?{qs_display}" if qs_display else "")
 
     with st.spinner("Calling the Tabnine API..."):
         status_code, response_data = make_request(
             token=token,
             method=endpoint["method"],
-            path=resolved_path + (f"?{qs}" if qs else ""),
+            path=resolved_path,
             body=body,
             base_url=BASE_URL_EFFECTIVE,
+            query_params=query_dict if query_dict else None,
         )
 
     st.markdown("---")
     st.subheader("Response")
     st.caption(f"Request sent to: `{full_url}`")
-    render_response(status_code, response_data)
+    render_response(status_code, response_data, endpoint=endpoint)
 
     # ── cURL equivalent ────────────────────────────────────────────────────
     st.markdown("---")
