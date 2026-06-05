@@ -386,23 +386,50 @@ def _fetch_teams(token: str, base_url: str) -> list[dict]:
     return st.session_state[cache_key]
 
 
-def _fetch_users(token: str, base_url: str) -> list[dict]:
+def _fetch_users(token: str, base_url: str, force: bool = False) -> list[dict]:
+    """Fetch all org users and cache them. Returns a flat list of user dicts."""
     cache_key = f"_users_{hash(token + base_url)}"
+    if force and cache_key in st.session_state:
+        del st.session_state[cache_key]
+
     if cache_key not in st.session_state:
         code, data = make_request(token, "GET", "/api/v1/organization/users", base_url=base_url)
+        users: list[dict] = []
         if code == 200:
             if isinstance(data, list):
+                # Plain array response
                 users = data
             elif isinstance(data, dict):
-                users = next(
-                    (data[k] for k in ("users", "data", "items") if isinstance(data.get(k), list)),
-                    [],
-                )
-            else:
-                users = []
-        else:
-            users = []
-        st.session_state[cache_key] = users
+                # Try every known wrapper key
+                for key in ("users", "data", "items", "members", "results"):
+                    val = data.get(key)
+                    if isinstance(val, list):
+                        users = val
+                        break
+                # Some endpoints nest the user under a "user" sub-key in each item
+                if not users and "user" in data and isinstance(data["user"], dict):
+                    users = [data["user"]]
+        # Normalise: ensure each entry has at minimum an 'id' and 'email' field
+        normalised = []
+        for u in users:
+            if isinstance(u, dict):
+                # Some responses wrap the user under a "user" key inside each list item
+                actual = u.get("user", u)
+                uid   = actual.get("id") or actual.get("user_id") or actual.get("userId") or ""
+                email = actual.get("email") or actual.get("username") or uid
+                role  = actual.get("role", "")
+                active = actual.get("active", True)
+                normalised.append({
+                    "id": uid,
+                    "email": email,
+                    "role": role,
+                    "active": active,
+                    "_raw": actual,
+                })
+        st.session_state[cache_key] = normalised
+        # Store last fetch status for UI feedback
+        st.session_state[f"{cache_key}_status"] = code
+
     return st.session_state[cache_key]
 
 
@@ -485,25 +512,61 @@ def _smart_param_input(
 
     # ── User ID → pre-fetched user selector ───────────────────────────────
     if kl in ("userid", "user_id") and token:
-        users = _fetch_users(token, base_url)
-        if users:
-            options_map: dict[str, str] = {}
-            for u in users:
-                uid   = u.get("id", u.get("user_id", ""))
-                email = u.get("email", uid)
-                role  = u.get("role", "")
-                options_map[f"{email} ({role})"] = uid
+        cache_key    = f"_users_{hash(token + base_url)}"
+        refresh_key  = f"_refresh_users_{widget_key}"
 
-            labels = list(options_map.keys())
-            pre = next((lbl for lbl, v in options_map.items() if v == default), labels[0] if labels else "")
-            if labels:
-                chosen = st.selectbox(label, options=labels,
-                                      index=labels.index(pre) if pre in labels else 0,
-                                      help=hint, key=widget_key)
-                st.caption(f"ID: `{options_map[chosen]}`")
-                return options_map[chosen]
-        return st.text_input(label, value=default, help=hint,
-                             key=widget_key, placeholder="User UUID")
+        # Refresh button sits on the same row as the label via a trick column
+        hdr_col, btn_col = st.columns([4, 1])
+        with hdr_col:
+            st.markdown(f"**{label}**", help=hint)
+        with btn_col:
+            if st.button("↻ Refresh", key=refresh_key, help="Re-fetch the user list"):
+                _fetch_users(token, base_url, force=True)
+
+        users = _fetch_users(token, base_url)
+        fetch_status = st.session_state.get(f"{cache_key}_status", None)
+
+        if fetch_status is not None and fetch_status != 200:
+            st.warning(
+                f"Could not load users (HTTP {fetch_status}). "
+                "Paste the User UUID manually below."
+            )
+            return st.text_input(
+                "User Id (manual)",
+                value=default,
+                key=widget_key,
+                placeholder="User UUID",
+            )
+
+        if not users:
+            st.info("No users found in this organisation, or the list is still loading.")
+            return st.text_input(
+                "User Id (manual)",
+                value=default,
+                key=widget_key,
+                placeholder="User UUID",
+            )
+
+        options_map: dict[str, str] = {}
+        for u in users:
+            uid    = u.get("id", "")
+            email  = u.get("email", uid)
+            role   = u.get("role", "")
+            status = "✅" if u.get("active", True) else "❌"
+            options_map[f"{status} {email}  ({role})"] = uid
+
+        labels = list(options_map.keys())
+        pre    = next((lbl for lbl, v in options_map.items() if v == default), labels[0])
+        chosen = st.selectbox(
+            "Select user",
+            options=labels,
+            index=labels.index(pre) if pre in labels else 0,
+            key=widget_key,
+            label_visibility="collapsed",
+        )
+        chosen_id = options_map[chosen]
+        st.caption(f"User ID: `{chosen_id}` · {len(users)} user{'s' if len(users) != 1 else ''} loaded")
+        return chosen_id
 
     # ── Limit / Offset → number input ─────────────────────────────────────
     if kl in ("limit", "offset"):
