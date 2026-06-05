@@ -1,3 +1,4 @@
+import re as _re
 import streamlit as st
 import requests
 import json
@@ -363,13 +364,207 @@ def build_path(path_template: str, params: dict) -> str:
     return path_template
 
 
-def _metric_card(label: str, value, delta=None, suffix: str = "") -> None:
-    """Render a single st.metric tile, formatting large numbers with commas."""
+# ── Value type detection & formatting ──────────────────────────────────────────
+
+# Keywords that signal a field holds a timestamp
+_TS_KEYS = {"expir", "creat", "updat", "revok", "at", "date", "time", "issued", "start", "end"}
+# Keywords that signal a cost / monetary value
+_COST_KEYS = {"cost", "price", "amount", "fee", "spend"}
+# Keywords that signal a seat / count of something
+_SEAT_KEYS = {"seat", "count", "total", "used", "limit", "quota", "active"}
+# UUID pattern (simple heuristic)
+_UUID_RE = _re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.I)
+
+
+def _is_ts_key(key: str) -> bool:
+    kl = key.lower()
+    return any(kw in kl for kw in _TS_KEYS)
+
+
+def _fmt_ts(value) -> str | None:
+    """Try to parse value as a timestamp and return a human date string, or None."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        formatted = f"{value:,.0f}{suffix}" if isinstance(value, int) else f"{value:,.2f}{suffix}"
+        # Unix seconds (~2001–2286) or milliseconds
+        if 1_000_000_000 < value < 9_999_999_999:
+            return datetime.utcfromtimestamp(value).strftime("%-d %b %Y  %H:%M UTC")
+        if 1_000_000_000_000 < value < 9_999_999_999_999:
+            return datetime.utcfromtimestamp(value / 1000).strftime("%-d %b %Y  %H:%M UTC")
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).strftime("%-d %b %Y  %H:%M UTC")
+            except ValueError:
+                continue
+    return None
+
+
+def _classify(key: str, value) -> tuple[str, str]:
+    """Return (display_string, type_tag) for a single field."""
+    kl = key.lower()
+
+    if value is None:
+        return "—", "null"
+
+    if isinstance(value, bool):
+        return ("Yes" if value else "No"), ("bool_true" if value else "bool_false")
+
+    if isinstance(value, list):
+        return f"{len(value)} item{'s' if len(value) != 1 else ''}", "list"
+
+    if isinstance(value, dict):
+        return f"{len(value)} field{'s' if len(value) != 1 else ''}", "dict"
+
+    # Timestamp fields
+    if _is_ts_key(key):
+        ts = _fmt_ts(value)
+        if ts:
+            return ts, "date"
+
+    if isinstance(value, (int, float)):
+        # Cost / monetary
+        if any(kw in kl for kw in _COST_KEYS):
+            return f"${value:,.2f}", "cost"
+        # Ratio / factor (0–1 or 0–100 labelled as factor/rate/percent)
+        if any(kw in kl for kw in ("factor", "rate", "percent", "ratio")) and 0 <= value <= 1:
+            return f"{value * 100:.1f}%", "percent"
+        return f"{int(value):,}" if isinstance(value, int) else f"{value:,.4f}", "number"
+
+    if isinstance(value, str):
+        if _UUID_RE.match(value):
+            return value, "uuid"
+        # ISO datetime as string (fallback)
+        ts = _fmt_ts(value)
+        if ts:
+            return ts, "date"
+        return value, "string"
+
+    return str(value), "other"
+
+
+# ── Single-field HTML card ──────────────────────────────────────────────────────
+
+_CARD_COLOURS = {
+    "date":       "#3B82F6",   # blue
+    "bool_true":  "#10B981",   # green
+    "bool_false": "#EF4444",   # red
+    "cost":       "#F59E0B",   # amber
+    "percent":    "#8B5CF6",   # violet
+    "number":     "#6366F1",   # indigo
+    "uuid":       "#64748B",   # slate
+    "list":       "#0EA5E9",   # sky
+    "dict":       "#0EA5E9",
+    "null":       "#374151",   # dark grey
+    "string":     "#475569",   # cool grey
+    "other":      "#475569",
+}
+
+_BOOL_ICONS = {"bool_true": "✅", "bool_false": "❌"}
+
+
+def _field_card_html(label: str, display: str, type_tag: str) -> str:
+    colour = _CARD_COLOURS.get(type_tag, "#475569")
+    icon   = _BOOL_ICONS.get(type_tag, "")
+    font   = "font-family:monospace;font-size:0.78rem;" if type_tag == "uuid" else "font-size:0.92rem;font-weight:600;"
+    return (
+        f'<div style="background:#1E293B;border-radius:8px;padding:12px 14px;'
+        f'border-left:3px solid {colour};margin-bottom:6px;">'
+        f'<div style="font-size:0.62rem;color:#94A3B8;text-transform:uppercase;'
+        f'letter-spacing:.08em;margin-bottom:5px;">{label}</div>'
+        f'<div style="color:#F1F5F9;{font}word-break:break-all;">{icon} {display}</div>'
+        f'</div>'
+    )
+
+
+# ── Object renderer ─────────────────────────────────────────────────────────────
+
+def _render_object(data: dict) -> None:
+    """Render a flat object as a grid of styled field cards, handling nested dicts."""
+    flat = pd.json_normalize(data, sep=" › ").to_dict(orient="records")
+    if not flat:
+        st.json(data)
+        return
+
+    pairs = list(flat[0].items())
+    n_cols = min(len(pairs), 3)
+    cols = st.columns(n_cols)
+    for i, (raw_key, value) in enumerate(pairs):
+        label   = raw_key.replace("_", " ").title()
+        display, type_tag = _classify(raw_key.split(" › ")[-1], value)
+        with cols[i % n_cols]:
+            st.markdown(_field_card_html(label, display, type_tag), unsafe_allow_html=True)
+
+
+# ── List / table renderer ───────────────────────────────────────────────────────
+
+def _fmt_df_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply type-aware formatting to every column of a dataframe for display."""
+    df = df.copy()
+    for col in df.columns:
+        col_key = col.split(".")[-1]  # handle dot-notated nested keys
+        sample_non_null = df[col].dropna()
+        if sample_non_null.empty:
+            continue
+
+        first = sample_non_null.iloc[0]
+        _, tag = _classify(col_key, first)
+
+        if tag == "date":
+            df[col] = df[col].apply(
+                lambda v: _fmt_ts(v) or str(v) if v is not None else "—"
+            )
+        elif tag in ("bool_true", "bool_false"):
+            df[col] = df[col].apply(
+                lambda v: ("✅ Yes" if v else "❌ No") if isinstance(v, bool) else str(v)
+            )
+        elif tag == "cost":
+            df[col] = df[col].apply(
+                lambda v: f"${v:,.2f}" if isinstance(v, (int, float)) else str(v)
+            )
+        elif tag == "number":
+            df[col] = df[col].apply(
+                lambda v: f"{int(v):,}" if isinstance(v, int) else (f"{v:,.4f}" if isinstance(v, float) else str(v))
+            )
+        elif tag == "percent":
+            df[col] = df[col].apply(
+                lambda v: f"{v * 100:.1f}%" if isinstance(v, (int, float)) else str(v)
+            )
+    return df
+
+
+def _render_list(data: list, search_key: str = "_list_search") -> None:
+    """Render a list as a formatted, searchable dataframe."""
+    if not data:
+        st.info("Empty list returned.")
+        return
+
+    df_raw  = pd.json_normalize(data)
+    df_disp = _fmt_df_columns(df_raw)
+    total   = len(df_disp)
+
+    search = st.text_input(
+        "Filter rows",
+        placeholder="Search across all columns…",
+        key=search_key,
+    )
+    if search:
+        mask = df_disp.apply(
+            lambda col: col.astype(str).str.contains(search, case=False, na=False)
+        ).any(axis=1)
+        df_disp = df_disp[mask]
+
+    st.caption(f"Showing **{len(df_disp)}** of **{total}** rows")
+    st.dataframe(df_disp, use_container_width=True, hide_index=True)
+
+
+# ── Usage dashboard ─────────────────────────────────────────────────────────────
+
+def _metric_tile(label: str, value, suffix: str = "", delta=None) -> None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        fmt = f"{int(value):,}{suffix}" if isinstance(value, int) else f"{value:,.2f}{suffix}"
     else:
-        formatted = str(value)
-    st.metric(label=label, value=formatted, delta=delta)
+        fmt = f"{value}{suffix}"
+    st.metric(label=label, value=fmt, delta=delta)
 
 
 def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
@@ -377,10 +572,9 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
     usage_block = data.get("usage", data)
     items = usage_block.get("data", [])
     if not items:
-        st.warning("No data points returned for the selected date range.")
+        st.warning("No usage data returned for the selected date range.")
         return
 
-    # ── Aggregate totals across all data points ────────────────────────────
     def _sum(key, nested=None):
         total = 0
         for item in items:
@@ -390,157 +584,134 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
 
     is_v2 = "v2" in endpoint.get("path", "")
 
+    # ── KPI tiles ─────────────────────────────────────────────────────────
     st.subheader("Summary")
     if is_v2:
         c1, c2, c3, c4, c5 = st.columns(5)
-        with c1: _metric_card("Active Users", _sum("activeUsers"))
-        with c2: _metric_card("Tokens Consumed", _sum("totalTokensConsumed"))
-        with c3: _metric_card("Input Tokens", _sum("totalInputTokens"))
-        with c4: _metric_card("Output Tokens", _sum("totalOutputTokens"))
-        with c5: _metric_card("Total Cost", _sum("totalCost"), suffix=" $")
+        with c1: _metric_tile("Active Users",      _sum("activeUsers"))
+        with c2: _metric_tile("Tokens Consumed",   _sum("totalTokensConsumed"))
+        with c3: _metric_tile("Input Tokens",      _sum("totalInputTokens"))
+        with c4: _metric_tile("Output Tokens",     _sum("totalOutputTokens"))
+        with c5: _metric_tile("Total Cost",        _sum("totalCost"), suffix=" $")
     else:
         c1, c2, c3, c4, c5, c6 = st.columns(6)
-        with c1: _metric_card("Active Users", _sum("activeUsers"))
-        with c2: _metric_card("Completions", _sum("completions", "codeCompletions"))
-        with c3: _metric_card("Chars Completed", _sum("charsCompleted", "codeCompletions"))
-        with c4: _metric_card("Chat Interactions", _sum("interactions", "chat"))
-        with c5: _metric_card("Agent Interactions", _sum("interactions", "agent"))
-        with c6: _metric_card("Automation Factor", round(_sum("automationFactor", "codeCompletions") / max(len(items), 1), 2))
+        with c1: _metric_tile("Active Users",       _sum("activeUsers"))
+        with c2: _metric_tile("Completions",        _sum("completions",     "codeCompletions"))
+        with c3: _metric_tile("Chars Completed",    _sum("charsCompleted",  "codeCompletions"))
+        with c4: _metric_tile("Chat Interactions",  _sum("interactions",    "chat"))
+        with c5: _metric_tile("Agent Interactions", _sum("interactions",    "agent"))
+        with c6: _metric_tile("Automation Factor",
+                              round(_sum("automationFactor", "codeCompletions") / max(len(items), 1), 2))
 
-    # ── Time-series chart (only meaningful when multiple data points) ──────
+    # ── Trend chart ────────────────────────────────────────────────────────
     if len(items) > 1:
         st.subheader("Trend")
         df_trend = pd.DataFrame(items)
         df_trend["from"] = pd.to_datetime(df_trend["from"], errors="coerce")
 
         if is_v2 and "totalTokensConsumed" in df_trend.columns:
-            fig = px.line(df_trend, x="from", y=["totalTokensConsumed", "totalInputTokens", "totalOutputTokens"],
-                          labels={"value": "Tokens", "from": "Date", "variable": "Metric"},
-                          title="Token Consumption Over Time")
+            fig = px.line(
+                df_trend, x="from",
+                y=["totalTokensConsumed", "totalInputTokens", "totalOutputTokens"],
+                labels={"value": "Tokens", "from": "Date", "variable": "Metric"},
+                title="Token Consumption Over Time",
+            )
         elif "activeUsers" in df_trend.columns:
-            y_cols = [c for c in ["activeUsers"] if c in df_trend.columns]
-            fig = px.bar(df_trend, x="from", y=y_cols,
-                         labels={"value": "Count", "from": "Date", "variable": "Metric"},
-                         title="Active Users Over Time", barmode="group")
+            fig = px.bar(
+                df_trend, x="from", y="activeUsers",
+                labels={"activeUsers": "Active Users", "from": "Date"},
+                title="Active Users Over Time",
+            )
         else:
             fig = None
 
         if fig:
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              font_color="#F8FAFC", legend_title_text="")
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#F8FAFC", legend_title_text="",
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── Model breakdown chart (v2 only) ───────────────────────────────────
+    # ── Model breakdown donut (v2 only) ────────────────────────────────────
     if is_v2:
-        model_rows = []
-        for item in items:
-            for mb in item.get("modelBreakdown", []):
-                model_rows.append(mb)
+        model_rows = [mb for item in items for mb in item.get("modelBreakdown", [])]
         if model_rows:
             st.subheader("Model Breakdown")
-            df_models = pd.DataFrame(model_rows)
-            if "model" in df_models.columns and "tokensConsumed" in df_models.columns:
-                agg = df_models.groupby("model", as_index=False)["tokensConsumed"].sum()
+            df_m = pd.DataFrame(model_rows)
+            if "model" in df_m.columns and "tokensConsumed" in df_m.columns:
+                agg = df_m.groupby("model", as_index=False)["tokensConsumed"].sum()
                 fig2 = px.pie(agg, names="model", values="tokensConsumed",
                               title="Tokens by Model", hole=0.4)
                 fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="#F8FAFC")
                 st.plotly_chart(fig2, use_container_width=True)
 
-    # ── Data table ────────────────────────────────────────────────────────
+    # ── Data table ─────────────────────────────────────────────────────────
     st.subheader("Data Table")
-    df_flat = pd.json_normalize(items)
+    df_flat = _fmt_df_columns(pd.json_normalize(items))
     st.dataframe(df_flat, use_container_width=True, hide_index=True)
 
 
-def _render_list(data: list) -> None:
-    """Render a list response as a searchable, styled dataframe."""
-    if not data:
-        st.info("Empty list returned.")
-        return
-    df = pd.json_normalize(data)
-    total = len(df)
-    search = st.text_input("Filter rows", placeholder="Type to search across all columns…", key="_list_search")
-    if search:
-        mask = df.apply(lambda col: col.astype(str).str.contains(search, case=False, na=False)).any(axis=1)
-        df = df[mask]
-    st.caption(f"Showing {len(df)} of {total} rows")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-
-def _render_object(data: dict) -> None:
-    """Render a single-object response as a key-value info card grid."""
-    flat = pd.json_normalize(data).to_dict(orient="records")
-    if not flat:
-        st.json(data)
-        return
-    items = list(flat[0].items())
-    cols = st.columns(min(len(items), 4))
-    for i, (k, v) in enumerate(items):
-        with cols[i % len(cols)]:
-            label = k.replace("_", " ").replace(".", " › ").title()
-            if isinstance(v, bool):
-                st.metric(label, "Yes" if v else "No")
-            elif isinstance(v, (int, float)) and not isinstance(v, bool):
-                st.metric(label, f"{v:,}")
-            elif isinstance(v, list):
-                st.metric(label, f"{len(v)} items")
-            else:
-                st.metric(label, str(v) if v is not None else "—")
-
+# ── Top-level response router ───────────────────────────────────────────────────
 
 def render_response(code: int, data: dict | list, endpoint: dict | None = None) -> None:
-    """Smart renderer: BI dashboard for usage, table for lists, cards for objects."""
+    """Route API response to the best renderer and always offer a Raw JSON tab."""
     st.markdown(f"**Status:** {status_badge(code)}")
 
     if code == 0 or not (200 <= code < 300):
         st.json(data)
         return
 
-    ep = endpoint or {}
+    ep   = endpoint or {}
     path = ep.get("path", "")
 
-    # ── Route to the right renderer ───────────────────────────────────────
-    rendered_smart = False
-
+    # ── Usage endpoints → BI dashboard ────────────────────────────────────
     if "usage" in path and isinstance(data, dict):
-        tab_bi, tab_raw = st.tabs(["Dashboard", "Raw JSON"])
-        with tab_bi:
+        tab_dash, tab_raw = st.tabs(["📊 Dashboard", "{ } Raw JSON"])
+        with tab_dash:
             _render_usage_dashboard(data, ep)
         with tab_raw:
             st.json(data)
-        rendered_smart = True
+        return
 
-    elif isinstance(data, list):
-        tab_table, tab_raw = st.tabs(["Table", "Raw JSON"])
+    # ── Top-level array ────────────────────────────────────────────────────
+    if isinstance(data, list):
+        tab_table, tab_raw = st.tabs(["📋 Table", "{ } Raw JSON"])
         with tab_table:
             _render_list(data)
         with tab_raw:
             st.json(data)
-        rendered_smart = True
+        return
 
-    elif isinstance(data, dict):
-        # Lists nested under common keys
-        list_key = next((k for k in ("data", "items", "users", "teams", "results") if k in data and isinstance(data[k], list)), None)
+    # ── Dict with a nested list under a known key ──────────────────────────
+    if isinstance(data, dict):
+        list_key = next(
+            (k for k in ("data", "items", "users", "teams", "results", "permissions")
+             if k in data and isinstance(data[k], list)),
+            None,
+        )
         if list_key:
-            tab_table, tab_raw = st.tabs(["Table", "Raw JSON"])
+            tab_table, tab_raw = st.tabs(["📋 Table", "{ } Raw JSON"])
             with tab_table:
-                meta = {k: v for k, v in data.items() if k != list_key}
+                # Show pagination / meta fields above the table
+                meta = {k: v for k, v in data.items() if k != list_key and not isinstance(v, (dict, list))}
                 if meta:
-                    meta_cols = st.columns(min(len(meta), 4))
+                    mcols = st.columns(min(len(meta), 5))
                     for i, (k, v) in enumerate(meta.items()):
-                        with meta_cols[i % len(meta_cols)]:
-                            st.metric(k.replace("_", " ").title(), str(v))
-                _render_list(data[list_key])
+                        display, tag = _classify(k, v)
+                        with mcols[i % len(mcols)]:
+                            st.markdown(_field_card_html(k.replace("_", " ").title(), display, tag),
+                                        unsafe_allow_html=True)
+                _render_list(data[list_key], search_key="_nested_list_search")
             with tab_raw:
                 st.json(data)
-            rendered_smart = True
+            return
 
-    if not rendered_smart:
-        tab_cards, tab_raw = st.tabs(["Overview", "Raw JSON"])
-        with tab_cards:
-            _render_object(data)
-        with tab_raw:
-            st.json(data)
+    # ── Single object (org, license, etc.) ────────────────────────────────
+    tab_overview, tab_raw = st.tabs(["🗂 Overview", "{ } Raw JSON"])
+    with tab_overview:
+        _render_object(data)
+    with tab_raw:
+        st.json(data)
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
