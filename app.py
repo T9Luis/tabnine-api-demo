@@ -369,7 +369,9 @@ def build_path(path_template: str, params: dict) -> str:
 def _fetch_teams(token: str, base_url: str) -> list[dict]:
     cache_key = f"_teams_{hash(token + base_url)}"
     if cache_key not in st.session_state:
-        code, data = make_request(token, "GET", "/api/v1/organization/teams", base_url=base_url)
+        org_id = st.session_state.get("org_id") or None
+        qp = {"organizationId": org_id} if org_id else None
+        code, data = make_request(token, "GET", "/api/v1/organization/teams", base_url=base_url, query_params=qp)
         if code == 200:
             if isinstance(data, list):
                 teams = data
@@ -393,7 +395,9 @@ def _fetch_users(token: str, base_url: str, force: bool = False) -> list[dict]:
         del st.session_state[cache_key]
 
     if cache_key not in st.session_state:
-        code, data = make_request(token, "GET", "/api/v1/organization/users", base_url=base_url)
+        org_id = st.session_state.get("org_id") or None
+        qp = {"organizationId": org_id} if org_id else None
+        code, data = make_request(token, "GET", "/api/v1/organization/users", base_url=base_url, query_params=qp)
         users: list[dict] = []
         if code == 200:
             if isinstance(data, list):
