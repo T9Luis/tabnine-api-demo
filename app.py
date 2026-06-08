@@ -1254,6 +1254,9 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
 
 def render_response(code: int, data: dict | list, endpoint: dict | None = None) -> None:
     """Route API response to the best renderer and always offer a Raw JSON tab."""
+    ep   = endpoint or {}
+    path = ep.get("path", "")
+
     st.markdown(f"**Status:** {status_badge(code)}")
 
     if code == 0 or not (200 <= code < 300):
@@ -1268,9 +1271,6 @@ def render_response(code: int, data: dict | list, endpoint: dict | None = None) 
         else:
             st.json(data)
         return
-
-    ep   = endpoint or {}
-    path = ep.get("path", "")
 
     # ── Usage endpoints → BI dashboard ────────────────────────────────────
     if "usage" in path and isinstance(data, dict):
