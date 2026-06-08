@@ -187,11 +187,11 @@ API_ENDPOINTS = {
         "category": "Agent Usage",
         "description": "Retrieve agent (Tabnine Agent) usage statistics for your organisation. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#org-agent-usage",
+        "base_url": "https://api.tabnine.com",
         "path_params": [],
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
             ("granularity", "all",                  "all | day | week | month"),
@@ -204,11 +204,11 @@ API_ENDPOINTS = {
         "category": "Agent Usage",
         "description": "Retrieve agent usage statistics scoped to a specific team. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#team-agent-usage",
+        "base_url": "https://api.tabnine.com",
         "path_params": [],
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("teamId",      "", "Team identifier (required)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
@@ -222,11 +222,11 @@ API_ENDPOINTS = {
         "category": "Agent Usage",
         "description": "Retrieve agent usage statistics scoped to a specific user. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#user-agent-usage",
+        "base_url": "https://api.tabnine.com",
         "path_params": [],
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("userId",      "", "User identifier (required)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
@@ -1447,7 +1447,7 @@ col_info, col_doc = st.columns([3, 1])
 with col_info:
     st.markdown(
         f'{version_badge}{method_badge}'
-        f'<code style="font-size:0.9rem;">{BASE_URL_EFFECTIVE}{endpoint["path"]}</code>',
+        f'<code style="font-size:0.9rem;">{endpoint.get("base_url", BASE_URL_EFFECTIVE)}{endpoint["path"]}</code>',
         unsafe_allow_html=True,
     )
     st.markdown(f"**{selected_name.split(' · ', 1)[-1]}** — {endpoint['description']}")
@@ -1567,9 +1567,12 @@ if st.button(
     # Build query dict (non-empty values only) — requests handles URL encoding
     query_dict = {k: v for k, v in query_values.items() if v}
 
+    # Some endpoints (agent-usage) live on a different host per the OpenAPI spec
+    effective_base = endpoint.get("base_url", BASE_URL_EFFECTIVE)
+
     # Build display URL (approximate — requests will properly encode special chars)
     qs_display = "&".join(f"{k}={v}" for k, v in query_dict.items())
-    full_url = f"{BASE_URL_EFFECTIVE}{resolved_path}" + (f"?{qs_display}" if qs_display else "")
+    full_url = f"{effective_base}{resolved_path}" + (f"?{qs_display}" if qs_display else "")
 
     with st.spinner("Calling the Tabnine API..."):
         status_code, response_data = make_request(
@@ -1577,7 +1580,7 @@ if st.button(
             method=endpoint["method"],
             path=resolved_path,
             body=body,
-            base_url=BASE_URL_EFFECTIVE,
+            base_url=effective_base,
             query_params=query_dict if query_dict else None,
         )
 
