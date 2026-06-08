@@ -191,6 +191,7 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
+            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
             ("granularity", "all",                  "all | day | week | month"),
@@ -207,6 +208,7 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
+            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("teamId",      "", "Team identifier (required)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
@@ -224,6 +226,7 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
+            ("organizationId", "", "Your organisation UUID (required despite spec omission)"),
             ("userId",      "", "User identifier (required)"),
             ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
             ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
