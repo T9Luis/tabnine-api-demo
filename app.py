@@ -191,9 +191,9 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID"),
-            ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
-            ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
+            ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
+            ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
+            ("granularity", "all",                  "all | day | week | month"),
         ],
     },
     "v1 · Team Agent Usage": {
@@ -207,10 +207,10 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID"),
-            ("teamId", "", "Team UUID"),
-            ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
-            ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
+            ("teamId",      "", "Team identifier (required)"),
+            ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
+            ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
+            ("granularity", "all",                  "all | day | week | month"),
         ],
     },
     "v1 · User Agent Usage": {
@@ -224,10 +224,10 @@ API_ENDPOINTS = {
         "body_fields": [],
         "agent": True,
         "query_params": [
-            ("organizationId", "", "Your organisation UUID"),
-            ("userId", "", "User UUID"),
-            ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
-            ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
+            ("userId",      "", "User identifier (required)"),
+            ("startDate",   "2026-01-01T00:00:00Z", "Start of reporting window (inclusive), ISO 8601"),
+            ("endDate",     "2026-03-31T00:00:00Z", "End of reporting window (exclusive), ISO 8601"),
+            ("granularity", "all",                  "all | day | week | month"),
         ],
     },
 
