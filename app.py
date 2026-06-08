@@ -1048,6 +1048,48 @@ def _metric_tile(label: str, value, suffix: str = "", delta=None) -> None:
     st.metric(label=label, value=fmt, delta=delta)
 
 
+def _build_id_lookup() -> dict[str, str]:
+    """Build a UUID → display-name map from already-cached session state.
+    No extra API calls — uses org, teams, and users that were fetched earlier.
+    """
+    lookup: dict[str, str] = {}
+    org_id   = st.session_state.get("org_id", "")
+    org_name = st.session_state.get("org_name", "")
+    if org_id and org_name:
+        lookup[org_id] = org_name
+
+    # Teams cache key format matches _fetch_teams
+    for key, val in st.session_state.items():
+        if key.startswith("_teams_") and isinstance(val, list):
+            for t in val:
+                tid  = t.get("id", "")
+                name = t.get("name", "")
+                if tid and name:
+                    lookup[tid] = name
+        if key.startswith("_users_") and isinstance(val, list):
+            for u in val:
+                uid   = u.get("id", "")
+                email = u.get("email", "")
+                if uid and email:
+                    lookup[uid] = email
+    return lookup
+
+
+_UUID_PATTERN = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.I
+)
+
+
+def _resolve_model_label(model: str) -> str:
+    """Return a human-readable label for a model string.
+    Named models (e.g. 'claude-sonnet-4-20250514') are returned as-is.
+    UUID models are shortened to 'uuid:abc12345…' for chart legibility.
+    """
+    if _UUID_PATTERN.match(model or ""):
+        return f"uuid:{model[:8]}…"
+    return model or "unknown"
+
+
 def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
     """Render usage response as BI metric tiles + charts."""
     usage_block = data.get("usage", data)
@@ -1055,6 +1097,12 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
     if not items:
         st.warning("No usage data returned for the selected date range.")
         return
+
+    id_lookup = _build_id_lookup()
+
+    def _resolve(uid: str) -> str:
+        """Return display name for a UUID, or the raw value if not found."""
+        return id_lookup.get(uid, uid) if uid else "—"
 
     def _sum(key, nested=None):
         total = 0
@@ -1064,6 +1112,48 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
         return total
 
     is_v2 = "v2" in endpoint.get("path", "")
+
+    # ── Context banner ─────────────────────────────────────────────────────
+    ctx_fields: list[tuple[str, str]] = []
+    org_id  = data.get("organizationId", "")
+    user_id = data.get("userId", "")
+    team_id = data.get("teamId", "")
+    date_from = data.get("from", "")
+    date_to   = data.get("to", "")
+
+    if org_id:
+        resolved = _resolve(org_id)
+        ctx_fields.append(("Organisation", resolved if resolved != org_id else org_id[:8] + "…"))
+    if user_id:
+        resolved = _resolve(user_id)
+        ctx_fields.append(("User", resolved if resolved != user_id else user_id[:8] + "…"))
+    if team_id:
+        resolved = _resolve(team_id)
+        ctx_fields.append(("Team", resolved if resolved != team_id else team_id[:8] + "…"))
+    if date_from or date_to:
+        def _fmt_d(iso: str) -> str:
+            try:
+                return datetime.strptime(iso[:10], "%Y-%m-%d").strftime("%-d %b %Y")
+            except Exception:
+                try:
+                    return datetime.strptime(iso[:10], "%Y-%m-%d").strftime("%d %b %Y")
+                except Exception:
+                    return iso[:10]
+        ctx_fields.append(("Period", f"{_fmt_d(date_from)}  →  {_fmt_d(date_to)}"))
+
+    if ctx_fields:
+        ctx_cols = st.columns(len(ctx_fields))
+        for i, (label, value) in enumerate(ctx_fields):
+            with ctx_cols[i]:
+                st.markdown(
+                    f'<div style="background:#1E3A5F;border-radius:8px;padding:8px 14px;margin-bottom:12px;">'
+                    f'<div style="font-size:0.65rem;color:#93C5FD;text-transform:uppercase;'
+                    f'letter-spacing:.08em;">{label}</div>'
+                    f'<div style="font-size:0.95rem;font-weight:700;color:#F8FAFC;'
+                    f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{value}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
     # ── KPI tiles ─────────────────────────────────────────────────────────
     st.subheader("Summary")
@@ -1120,6 +1210,7 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
             st.subheader("Model Breakdown")
             df_m = pd.DataFrame(model_rows)
             if "model" in df_m.columns and "tokensConsumed" in df_m.columns:
+                df_m["model"] = df_m["model"].apply(_resolve_model_label)
                 agg = df_m.groupby("model", as_index=False)["tokensConsumed"].sum()
                 fig2 = px.pie(agg, names="model", values="tokensConsumed",
                               title="Tokens by Model", hole=0.4)
@@ -1131,6 +1222,13 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
     # Fully flatten nested objects (codeCompletions, chat, agent, models…)
     # sep=" › " gives readable column names like "chat › models › inputTokens"
     df_flat = pd.json_normalize(items, sep=" › ")
+    # Resolve known UUID columns to display names
+    _id_cols = {"organizationId", "userId", "teamId", "organizationid", "userid", "teamid"}
+    for col in df_flat.columns:
+        if col in _id_cols or col.split(" › ")[-1] in _id_cols:
+            df_flat[col] = df_flat[col].apply(
+                lambda v: f"{id_lookup[v]}  ({v[:8]}…)" if v in id_lookup else v
+            )
     # Any list/dict cells that survived (e.g. models arrays) get converted to strings
     df_flat = _fmt_df_columns(df_flat)
     # Rename columns for readability — strip leading path segments when unambiguous
