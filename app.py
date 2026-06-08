@@ -933,6 +933,46 @@ def _render_object(data: dict) -> None:
 
 # ── List / table renderer ───────────────────────────────────────────────────────
 
+def _cell_to_str(value) -> str:
+    """Convert a single dataframe cell value to a human-readable string.
+    Handles dicts, lists, None, and primitives so nothing renders as [object Object].
+    """
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "✅ Yes" if value else "❌ No"
+    if isinstance(value, dict):
+        # Flatten short dicts to "key: val, …"; show count for long ones
+        pairs = [f"{k}: {v}" for k, v in value.items() if not isinstance(v, (dict, list))]
+        if pairs:
+            summary = ", ".join(pairs[:4])
+            return summary + ("…" if len(pairs) > 4 else "")
+        return f"{{{len(value)} fields}}"
+    if isinstance(value, list):
+        if not value:
+            return "[ ]"
+        # If list of simple scalars, join them
+        if all(isinstance(i, (str, int, float, bool)) for i in value):
+            joined = ", ".join(str(i) for i in value[:6])
+            return joined + ("…" if len(value) > 6 else "")
+        # List of objects — show count and key fields from first item
+        if isinstance(value[0], dict):
+            sample_keys = list(value[0].keys())[:3]
+            return f"{len(value)} items  [{', '.join(sample_keys)}…]"
+        return f"{len(value)} items"
+    return value  # already a scalar
+
+
+def _sanitise_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Final pass: convert any remaining dict/list cells to readable strings.
+    Must run after all other formatting so nothing slips through as [object Object].
+    """
+    for col in df.columns:
+        if df[col].apply(lambda v: isinstance(v, (dict, list))).any():
+            df[col] = df[col].apply(_cell_to_str)
+    return df
+
+
 def _fmt_df_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Apply type-aware formatting to every column of a dataframe for display."""
     df = df.copy()
@@ -943,6 +983,10 @@ def _fmt_df_columns(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         first = sample_non_null.iloc[0]
+        # Skip columns that are already dicts/lists — _sanitise_df handles those
+        if isinstance(first, (dict, list)):
+            continue
+
         _, tag = _classify(col_key, first)
 
         if tag == "date":
@@ -965,7 +1009,8 @@ def _fmt_df_columns(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].apply(
                 lambda v: f"{v * 100:.1f}%" if isinstance(v, (int, float)) else str(v)
             )
-    return df
+    # Always sanitise remaining object cells last
+    return _sanitise_df(df)
 
 
 def _render_list(data: list, search_key: str = "_list_search") -> None:
@@ -1083,7 +1128,18 @@ def _render_usage_dashboard(data: dict, endpoint: dict) -> None:
 
     # ── Data table ─────────────────────────────────────────────────────────
     st.subheader("Data Table")
-    df_flat = _fmt_df_columns(pd.json_normalize(items))
+    # Fully flatten nested objects (codeCompletions, chat, agent, models…)
+    # sep=" › " gives readable column names like "chat › models › inputTokens"
+    df_flat = pd.json_normalize(items, sep=" › ")
+    # Any list/dict cells that survived (e.g. models arrays) get converted to strings
+    df_flat = _fmt_df_columns(df_flat)
+    # Rename columns for readability — strip leading path segments when unambiguous
+    short_names = {}
+    for col in df_flat.columns:
+        parts = col.split(" › ")
+        short = parts[-1] if parts[-1] not in short_names.values() else col
+        short_names[col] = short
+    df_flat = df_flat.rename(columns=short_names)
     st.dataframe(df_flat, use_container_width=True, hide_index=True)
 
 
