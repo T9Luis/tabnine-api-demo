@@ -185,10 +185,11 @@ API_ENDPOINTS = {
         "path": "/api/v1/organization/agent-usage",
         "version": "v1",
         "category": "Agent Usage",
-        "description": "Retrieve agent (Tabnine Agent) usage statistics for your organisation.",
+        "description": "Retrieve agent (Tabnine Agent) usage statistics for your organisation. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#org-agent-usage",
         "path_params": [],
         "body_fields": [],
+        "agent": True,
         "query_params": [
             ("organizationId", "", "Your organisation UUID"),
             ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
@@ -200,10 +201,11 @@ API_ENDPOINTS = {
         "path": "/api/v1/team/agent-usage",
         "version": "v1",
         "category": "Agent Usage",
-        "description": "Retrieve agent usage statistics scoped to a specific team.",
+        "description": "Retrieve agent usage statistics scoped to a specific team. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#team-agent-usage",
         "path_params": [],
         "body_fields": [],
+        "agent": True,
         "query_params": [
             ("organizationId", "", "Your organisation UUID"),
             ("teamId", "", "Team UUID"),
@@ -216,10 +218,11 @@ API_ENDPOINTS = {
         "path": "/api/v1/user/agent-usage",
         "version": "v1",
         "category": "Agent Usage",
-        "description": "Retrieve agent usage statistics scoped to a specific user.",
+        "description": "Retrieve agent usage statistics scoped to a specific user. Requires the Agent feature to be enabled on your licence.",
         "doc_anchor": "#user-agent-usage",
         "path_params": [],
         "body_fields": [],
+        "agent": True,
         "query_params": [
             ("organizationId", "", "Your organisation UUID"),
             ("userId", "", "User UUID"),
@@ -1251,7 +1254,16 @@ def render_response(code: int, data: dict | list, endpoint: dict | None = None) 
     st.markdown(f"**Status:** {status_badge(code)}")
 
     if code == 0 or not (200 <= code < 300):
-        st.json(data)
+        # Agent endpoints return 500 when the feature isn't licenced — show a clear message
+        if code == 500 and ep.get("agent"):
+            st.error(
+                "**500 — Agent feature not available.**\n\n"
+                "The Tabnine Agent feature is not enabled on your organisation's licence. "
+                "This endpoint requires it to return data. "
+                "Contact your Tabnine account team or check your licence via **v1 · Get License**."
+            )
+        else:
+            st.json(data)
         return
 
     ep   = endpoint or {}
@@ -1529,6 +1541,13 @@ if is_destructive:
         "Check the box below to confirm before running."
     )
     confirmed = st.checkbox("Yes, I understand — proceed with this action.")
+
+if endpoint.get("agent"):
+    st.info(
+        "ℹ️ **Agent feature required.** This endpoint only returns data if Tabnine Agent "
+        "is enabled on your organisation's licence. A **500 Server Error** response typically "
+        "means the feature is not active — contact your Tabnine account team to enable it."
+    )
 
 # ── Run button ─────────────────────────────────────────────────────────────────
 
