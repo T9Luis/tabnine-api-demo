@@ -190,6 +190,7 @@ API_ENDPOINTS = {
         "path_params": [],
         "body_fields": [],
         "query_params": [
+            ("organizationId", "", "Your organisation UUID"),
             ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
             ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
         ],
@@ -204,6 +205,7 @@ API_ENDPOINTS = {
         "path_params": [],
         "body_fields": [],
         "query_params": [
+            ("organizationId", "", "Your organisation UUID"),
             ("teamId", "", "Team UUID"),
             ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
             ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
@@ -219,6 +221,7 @@ API_ENDPOINTS = {
         "path_params": [],
         "body_fields": [],
         "query_params": [
+            ("organizationId", "", "Your organisation UUID"),
             ("userId", "", "User UUID"),
             ("startDate", "2026-01-01T00:00:00Z", "ISO 8601 start date"),
             ("endDate", "2026-03-31T00:00:00Z", "ISO 8601 end date"),
